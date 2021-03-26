@@ -1,0 +1,201 @@
+---
+title: "mRNA Trophoblast Analysis"
+author: "Magda"
+date: "27 11 2020"
+output:
+  
+  # Data frame is a list of vectors of equal length.
+  # Df_print is a method to be used for printing data frames.
+  # The paged method creates a paginated HTML table (only valid for formats that produce HTML).
+  # R objects can be of several different classes. A class describes what kind of information is contained in the object. Most common class is S3.
+  
+  pdf_document: default
+  html_document:
+    df_print: paged
+---
+
+```{r setup, include=FALSE}
+require(knitr)
+opts_knit$set(root.dir="C:/Users/x1/Desktop/part2_analysis/mrna")
+
+# Setting up the root directory.
+# If a certain option needs to be frequently set to a value in multiple code chunks, you can set it globally in the first code chunk of your document (r setup).
+# Include = FALSE prevents code and its results from appearing in the finished file.
+```
+
+## Set of Analysis
+
+Change working directory to where the data for the mRNA analysis is situated.
+Load required packages for the analysis.
+
+```{r}
+setwd("C:/Users/x1/Desktop/part2_analysis/mrna")
+library(DESeq2)
+library(ggplot2)
+library(Rtsne)
+library(RColorBrewer)
+library(gplots)
+```
+
+## Including Plots
+
+Read in the sample description file *pdata.txt* as an object called pdata.
+
+```{r echo=FALSE}
+pdata = read.table("pdata.txt",header=TRUE,sep="\t")
+
+# Read,table reads a file in table format and creates a data frame from it.
+# Sep: values on each line of the file are separated by this character, in this case tab.
+
+pdata$contrast=paste(pdata$culture,"_",pdata$class,sep="")
+pdata
+
+# The $ operator uses a name to perform the extraction as in anObject$aName. Therefore it enables one to extract items from a list based on their names. Since a data.frame() is also a list(), it's particularly well suited for accessing columns in a data frame.
+
+# Load Gene Names
+names=read.table('gene_names.txt',header=FALSE,row.names=1)
+
+# Row.names argument takes the column number of the data file from which to take the row names. It need not be the first column.
+```
+
+Note that the `echo = FALSE` parameter was added to the code chunk to prevent printing of the R code that generated the plot. Echo = FALSE prevents code, but not the results from appearing in the finished file.
+
+
+```{r}
+conds = as.factor(pdata$sampletype)
+
+condcols= brewer.pal(n = length(levels(conds)), name = 'Dark2')
+names(condcols)=levels(conds)
+
+classcols = brewer.pal(n = length(levels(as.factor(pdata$classtype))), name = 'Set3')
+names(classcols)=levels(as.factor(pdata$classtype))
+
+culturecols = c("red","darblue")
+names(culturecols)=c("2D","3D")
+```
+
+## Data Loading and Normalisation via DESeq2
+
+```{r}
+
+ddsHTSeq = DESeqDataSetFromHTSeqCount(sampleTable = pdata, directory = 'counts', design=~ contrast)
+
+# Data Normalisation
+dds = estimateSizeFactors(ddsHTSeq)
+# DESeq2 will model the raw counts, using normalization factors (size factors) to account for differences in library depth.
+# Data Dispersion
+dds
+dds = estimateDispersions(dds)
+dds
+# New Neg. Binomial test
+dds = nbinomWaldTest(dds)
+dds
+
+
+counts_table_raw=counts(dds,normalized=FALSE)
+counts_table_norm=counts(dds,normalized=TRUE)
+plotDispEsts(dds,main='Dispersion Plot')
+
+```
+
+# Sample QC
+
+## Number of reads per sample
+```{r}
+
+barplot(apply(counts_table_raw,2,sum),las=2,col=condcols[pdata$sampletype],main="Raw Counts",cex.names = 0.6)
+legend("bottomleft",levels(as.factor(pdata$sampletype)),fill=condcols[levels(as.factor(pdata$sampletype))],cex=0.4)
+barplot(apply(counts_table_norm,2,sum),las=2,col=condcols[pdata$sampletype],main="Norm Counts",cex.names=0.6)
+legend("bottomleft",levels(as.factor(pdata$sampletype)),fill=condcols[levels(as.factor(pdata$sampletype))],cex=0.4)
+
+
+```
+
+## Correlation Analysis
+```{r}
+hmcol = colorRampPalette(brewer.pal(9, 'GnBu'))(100)
+heatmap.2(cor(counts_table_norm),trace="none",col=hmcol,labRow = pdata$sampleno,cexRow=0.5,RowSideColors = condcols[pdata$sampletype],ColSideColors = classcols[pdata$classtype],main="Normalised Heatmap",labCol=pdata$classtype,cexCol = 0.5)
+```
+
+## Perform VST transformation to stabilise low counts
+
+
+```{r}
+vsd = varianceStabilizingTransformation(dds)
+vstMat = assay(vsd)
+heatmap.2(cor(vstMat),trace="none",col=hmcol,labRow = pdata$sampleno,cexRow=0.5,RowSideColors = condcols[pdata$sampletype],ColSideColors = classcols[pdata$classtype],main="Normalised Heatmap",labCol=pdata$classtype,cexCol = 0.5)
+```
+
+## Multidimensional Projectsion (PCA, tSNE)
+
+```{r}
+pca = princomp(assay(vsd))
+plot(pca$loadings, main='PCA Variance Stabilised', col=condcols[pdata$sampletype],  pch=19, cex=1)
+text(pca$loadings, as.character(conds), pos=3, cex=0.8)
+
+pca = princomp(assay(vsd))
+plot(pca$loadings, main='PCA Variance Stabilised', col=classcols[pdata$classtype],  pch=19, cex=1)
+text(pca$loadings, as.character(pdata$classtype), pos=3, cex=0.8)
+```
+```{r}
+set.seed(46)
+tsne = Rtsne(t(vstMat),perplexity=5,check_duplicates = FALSE)
+
+tsne.df <- data.frame(tsne.1 = tsne$Y[,1], tsne.2 = tsne$Y[,2])
+ggplot(data = tsne.df, aes(tsne.1, tsne.2)) +
+  geom_point(size = 7, pch = 20, colour = condcols[conds]) +
+  geom_text(size = 4, vjust=2, aes(label=pdata$sampleno)) +
+  scale_alpha_discrete(range = c(0.5, 1)) +
+  theme_minimal() +
+  ylab("tSNE 1") +
+  xlab("tSNE 2")
+
+tsne.df <- data.frame(tsne.1 = tsne$Y[,1], tsne.2 = tsne$Y[,2])
+ggplot(data = tsne.df, aes(tsne.1, tsne.2)) +
+  geom_point(size = 6, pch = 20, colour = classcols[pdata$classtype]) +
+  geom_text(size = 4, vjust=2, aes(label=pdata$classtype)) +
+  scale_alpha_discrete(range = c(0.5, 1)) +
+  theme_minimal() +
+  ylab("tSNE 1") +
+  xlab("tSNE 2")  
+```
+
+# Statistical Analysis
+
+Set up the contrasts desired
+```{r}
+
+# Set statistical thresholds
+lfc_threshold = 1.2
+p_value_threshold = 0.05
+
+
+# Perform the 2D comparison
+res2D <- results(dds, contrast=c("contrast","2D_villous","2D_extravillous"))
+res2D$genename=names[rownames(res2D),1]
+res2D=res2D[order(res2D$padj),]
+write.table(res2D,file = "res2d.txt",sep="\t",quote=F)
+sig_hits_2D = rownames(res2D[(res2D$padj<= p_value_threshold) & (!is.na(res2D$padj)) & (abs(res2D$log2FoldChange)>= lfc_threshold) ,])
+
+plot(res2D$log2FoldChange,-log10(res2D$padj),pch=19,cex=0.3,col="darkblue",main="Volcano Plot\n2D villous v extravillous")
+points(res2D[sig_hits_2D,]$log2FoldChange,-log10(res2D[sig_hits_2D,]$padj),pch=19,cex=0.3,col="red")
+text(res2D[sig_hits_2D,]$log2FoldChange[1:30],-log10(res2D[sig_hits_2D,]$padj[1:30]),labels = names[sig_hits_2D[1:30],1],pos=2,cex=0.4)
+abline(h=-log10(p_value_threshold),lty=2,col="red")
+abline(v=c(-lfc_threshold,lfc_threshold),lty=2,col="red")
+
+# Perform the 3D comparison
+res3D <- results(dds, contrast=c("contrast","3D_villous","3D_extravillous"))
+res3D$genename=names[rownames(res3D),1]
+res3D=res3D[order(res3D$padj),]
+write.table(res3D,file = "res3d.txt",sep="\t",quote=F)
+sig_hits_3D = rownames(res3D[(res3D$padj<= p_value_threshold) & (!is.na(res3D$padj)) & (abs(res3D$log2FoldChange)>= lfc_threshold) ,])
+
+plot(res3D$log2FoldChange,-log10(res3D$padj),pch=19,cex=0.3,col="darkblue",main="Volcano Plot\n3D villous v extravillous")
+points(res3D[sig_hits_3D,]$log2FoldChange,-log10(res3D[sig_hits_3D,]$padj),pch=19,cex=0.3,col="red")
+text(res3D[sig_hits_3D,]$log2FoldChange[1:30],-log10(res3D[sig_hits_3D,]$padj[1:30]),labels = names[sig_hits_3D[1:30],1],pos=2,cex=0.4)
+abline(h=-log10(p_value_threshold),lty=2,col="red")
+abline(v=c(-lfc_threshold,lfc_threshold),lty=2,col="red")
+
+
+
+```
